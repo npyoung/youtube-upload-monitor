@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!python3
 
 # Sample Python code for youtube.videos.insert
 # NOTES:
