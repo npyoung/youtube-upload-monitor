@@ -11,9 +11,6 @@
 #    transmission failure. To learn more about resumable uploads, see:
 #    https://developers.google.com/api-client-library/python/guide/media_upload
 
-import google.oauth2.credentials
-import google_auth_oauthlib.flow
-import googleapiclient.errors
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -23,7 +20,6 @@ from watchdog.observers import Observer
 from watchdog.events import PatternMatchingEventHandler
 
 import argparse as ap
-import httplib
 import httplib2
 import os
 from pathlib import Path
@@ -37,10 +33,7 @@ httplib2.RETRIES = 1
 MAX_RETRIES = 10
 
 # Always retry when these exceptions are raised.
-RETRIABLE_EXCEPTIONS = (httplib2.HttpLib2Error, IOError, httplib.NotConnected,
-  httplib.IncompleteRead, httplib.ImproperConnectionState,
-  httplib.CannotSendRequest, httplib.CannotSendHeader,
-  httplib.ResponseNotReady, httplib.BadStatusLine)
+RETRIABLE_EXCEPTIONS = (httplib2.HttpLib2Error, IOError)
 
 # Always retry when an apiclient.errors.HttpError with one of these status
 # codes is raised.
@@ -72,10 +65,10 @@ patterns = ['*.mp4', '*.mkv']
 
 def on_created(event):
     fname = event.src_path
-    print(f"File added: {fname}")
+    print("File added: {}".format(fname))
     try:
         do_upload(fname)
-    except HttpError, e:
+    except HttpError as e:
         print('An HTTP error {} occurred:\n{}'.format(e.resp.status, e.content))
 
 
@@ -133,12 +126,12 @@ def resumable_upload(request, fsize):
                 else:
                     progress.update(CHUNKSIZE)
 
-            except HttpError, e:
+            except HttpError as e:
                 if e.resp.status in RETRIABLE_STATUS_CODES:
                     error = 'A retriable HTTP error %d occurred:\n%s' % (e.resp.status, e.content)
                 else:
                     raise
-            except RETRIABLE_EXCEPTIONS, e:
+            except RETRIABLE_EXCEPTIONS as e:
                 error = "A retriable error occurred: {}".format(e)
 
             if error is not None:
@@ -149,7 +142,7 @@ def resumable_upload(request, fsize):
 
                 max_sleep = 2 ** retry
                 sleep_seconds = max_sleep
-                print("Sleeping {:d} seconds and then retrying...".format(sleep_seconds)
+                print("Sleeping {:d} seconds and then retrying...".format(sleep_seconds))
                 time.sleep(sleep_seconds)
 
 
