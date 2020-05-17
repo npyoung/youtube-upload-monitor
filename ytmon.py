@@ -16,13 +16,12 @@ from googleapiclient.errors import HttpError
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.http import MediaFileUpload
 from tqdm import tqdm
-from watchdog.observers import Observer
-from watchdog.events import PatternMatchingEventHandler
 
 import argparse as ap
 import httplib2
 import os
 from pathlib import Path
+from threading import Thread
 import time
 
 # Explicitly tell the underlying HTTP transport library not to retry, since
@@ -147,22 +146,24 @@ def resumable_upload(request, fsize):
 
 
 def main(dir):
-    # Set up watchdog
-    handler = PatternMatchingEventHandler(patterns, ignore_directories=True)
-    handler.on_created = on_created
-    observer = Observer()
-    observer.schedule(handler, dir, recursive=True)
-    observer.start()
-    print("Watching...")
+    # Set up folder watch
+    contents = set(os.listdir(dir))
 
     # Run until ctrl-c
     try:
         while True:
-            time.sleep(1)
+            time.sleep(10)
+            new_contents = set(os.listdir(dir))
+            added = new_contents - contents
+            contents = new_conents
+            for fname in added:
+                do_upload(os.path.join(dir, fname))
     except KeyboardInterrupt:
-        observer.stop()
-        observer.join()
         print("Quitting gracefully")
+
+
+
+
 
 
 if __name__ == '__main__':
