@@ -1,4 +1,4 @@
-#!python3
+#!usr/bin/env python
 
 # Sample Python code for youtube.videos.insert
 # NOTES:
@@ -18,6 +18,7 @@ from googleapiclient.http import MediaFileUpload
 from tqdm import tqdm
 
 import argparse as ap
+from fnmatch import fnmatch
 import httplib2
 import os
 from pathlib import Path
@@ -58,6 +59,7 @@ API_SERVICE_NAME = "youtube"
 API_VERSION = "v3"
 VALID_PRIVACY_STATUSES = ('public', 'private', 'unlisted')
 CHUNKSIZE = 64 * 1024**2
+FS_POLLING_INTERVAL = 10
 
 patterns = ['*.mp4', '*.mkv']
 
@@ -115,11 +117,11 @@ def resumable_upload(request, fsize):
     with tqdm(total=fsize) as progress:
         while response is None:
             try:
-                print("Uploading...")
+                progress.write("Uploading...")
                 status, response = request.next_chunk()
                 if response is not None:
                     if 'id' in response:
-                        print("Video id {} was successfully uploaded.".format(response['id']))
+                        progress.write("Video id {} was successfully uploaded.".format(response['id']))
                     else:
                         exit("The upload failed with an unexpected response: {}".format(response))
                 else:
@@ -134,14 +136,14 @@ def resumable_upload(request, fsize):
                 error = "A retriable error occurred: {}".format(e)
 
             if error is not None:
-                print(error)
+                progress.write(error)
                 retry += 1
                 if retry > MAX_RETRIES:
                     exit('No longer attempting to retry.')
 
                 max_sleep = 2 ** retry
                 sleep_seconds = max_sleep
-                print("Sleeping {:d} seconds and then retrying...".format(sleep_seconds))
+                progress.write("Sleeping {:d} seconds and then retrying...".format(sleep_seconds))
                 time.sleep(sleep_seconds)
 
 
@@ -152,18 +154,17 @@ def main(dir):
     # Run until ctrl-c
     try:
         while True:
-            time.sleep(10)
+            time.sleep(FS_POLLING_INTERVAL)
             new_contents = set(os.listdir(dir))
             added = new_contents - contents
-            contents = new_conents
+            contents = new_contents
             for fname in added:
-                do_upload(os.path.join(dir, fname))
+                for pattern in patterns:
+                    if fnmatch(fname, pattern):
+                        do_upload(os.path.join(dir, fname))
+                        break
     except KeyboardInterrupt:
         print("Quitting gracefully")
-
-
-
-
 
 
 if __name__ == '__main__':
