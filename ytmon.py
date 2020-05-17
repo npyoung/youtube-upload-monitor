@@ -1,4 +1,4 @@
-#!usr/bin/env python
+#!/usr/bin/env python
 
 # Sample Python code for youtube.videos.insert
 # NOTES:
@@ -58,7 +58,7 @@ client_secrets_file = Path.home() / "google_api_client_secret.json"
 API_SERVICE_NAME = "youtube"
 API_VERSION = "v3"
 VALID_PRIVACY_STATUSES = ('public', 'private', 'unlisted')
-CHUNKSIZE = 64 * 1024**2
+CHUNKSIZE = 32 * 1024**2
 FS_POLLING_INTERVAL = 10
 
 patterns = ['*.mp4', '*.mkv']
@@ -73,18 +73,21 @@ def on_created(event):
         print('An HTTP error {} occurred:\n{}'.format(e.resp.status, e.content))
 
 
-def do_upload(fname):
+def authenticate(client_secrets_file):
+    # Get credentials and create an API client
+    flow = InstalledAppFlow.from_client_secrets_file(client_secrets_file, SCOPES)
+    credentials = flow.run_console()
+    youtube = build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
+    return youtube
+
+
+def do_upload(youtube, fname):
     # Disable OAuthlib's HTTPS verification when running locally.
     # *DO NOT* leave this option enabled in production.
     #os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 
     # Figure out file size for progress later
     fsize = Path(fname).stat().st_size
-
-    # Get credentials and create an API client
-    flow = InstalledAppFlow.from_client_secrets_file(client_secrets_file, SCOPES)
-    credentials = flow.run_console()
-    youtube = build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
 
     # Use video name to come up with default title
     title = Path(fname).stem
@@ -115,9 +118,9 @@ def resumable_upload(request, fsize):
     error = None
     retry = 0
     with tqdm(total=fsize) as progress:
+        progress.write("Uploading...")
         while response is None:
             try:
-                progress.write("Uploading...")
                 status, response = request.next_chunk()
                 if response is not None:
                     if 'id' in response:
@@ -148,6 +151,9 @@ def resumable_upload(request, fsize):
 
 
 def main(dir):
+    # Authenticate
+    youtube = authenticate(client_secrets_file)
+
     # Set up folder watch
     contents = set(os.listdir(dir))
 
@@ -161,7 +167,7 @@ def main(dir):
             for fname in added:
                 for pattern in patterns:
                     if fnmatch(fname, pattern):
-                        do_upload(os.path.join(dir, fname))
+                        do_upload(youtube, os.path.join(dir, fname))
                         break
     except KeyboardInterrupt:
         print("Quitting gracefully")
