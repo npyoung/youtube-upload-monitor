@@ -60,6 +60,7 @@ API_VERSION = "v3"
 VALID_PRIVACY_STATUSES = ('public', 'private', 'unlisted')
 CHUNKSIZE = 32 * 1024**2
 FS_POLLING_INTERVAL = 10
+MAX_FS_RETRIES = 20
 
 patterns = ['*.mp4', '*.mkv']
 
@@ -167,7 +168,18 @@ def main(dir):
             for fname in added:
                 for pattern in patterns:
                     if fnmatch(fname, pattern):
-                        do_upload(youtube, os.path.join(dir, fname))
+                        retries = 0
+                        sleep_for = 10.0
+                        while retries < MAX_FS_RETRIES:
+                            try:
+                                do_upload(youtube, os.path.join(dir, fname))
+                                break
+                            except OSError:
+                                print("File not ready. Waiting {:0.0f} seconds.".format(sleep_for))
+                                time.sleep(sleep_for)
+                                sleep_for *= 2
+                                retries += 1
+                            print("File never became ready for upload")
                         break
     except KeyboardInterrupt:
         print("Quitting gracefully")
