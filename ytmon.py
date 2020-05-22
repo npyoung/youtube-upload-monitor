@@ -179,8 +179,7 @@ def main(dir):
                                 time.sleep(sleep_for)
                                 sleep_for *= 2
                                 retries += 1
-                            print("File never became ready for upload")
-                        break
+                        print("File never became ready for upload")
     except KeyboardInterrupt:
         print("Quitting gracefully")
 
