@@ -1,77 +1,38 @@
 #!/usr/bin/env python
-
-# Sample Python code for youtube.videos.insert
-# NOTES:
-# 1. This sample code uploads a file and can't be executed via this interface.
-#    To test this code, you must run it locally using your own API credentials.
-#    See: https://developers.google.com/explorer-help/guides/code_samples#python
-# 2. This example makes a simple upload request. We recommend that you consider
-#    using resumable uploads instead, particularly if you are transferring large
-#    files or there's a high likelihood of a network interruption or other
-#    transmission failure. To learn more about resumable uploads, see:
-#    https://developers.google.com/api-client-library/python/guide/media_upload
-
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.http import MediaFileUpload
 from tqdm import tqdm
+from retrying import retry
 
 import argparse as ap
 from fnmatch import fnmatch
 import httplib2
 import os
 from pathlib import Path
-from threading import Thread
 import time
 
-# Explicitly tell the underlying HTTP transport library not to retry, since
-# we are handling retry logic ourselves.
-httplib2.RETRIES = 1
 
-# Maximum number of times to retry before giving up.
-MAX_RETRIES = 10
-
-# Always retry when these exceptions are raised.
-RETRIABLE_EXCEPTIONS = (httplib2.HttpLib2Error, IOError)
-
-# Always retry when an apiclient.errors.HttpError with one of these status
-# codes is raised.
-RETRIABLE_STATUS_CODES = [500, 502, 503, 504]
-
-# This OAuth 2.0 access scope allows an application to upload files to the
-# authenticated user's YouTube channel, but doesn't allow other types of access.
-SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
-
-# The CLIENT_SECRETS_FILE variable specifies the name of a file that contains
-# the OAuth 2.0 information for this application, including its client_id and
-# client_secret. You can acquire an OAuth 2.0 client ID and client secret from
-# the {{ Google Cloud Console }} at
-# {{ https://cloud.google.com/console }}.
-# Please ensure that you have enabled the YouTube Data API for your project.
-# For more information about using OAuth2 to access the YouTube Data API, see:
-#   https://developers.google.com/youtube/v3/guides/authentication
-# For more information about the client_secrets.json file format, see:
-#   https://developers.google.com/api-client-library/python/guide/aaa_client_secrets
-client_secrets_file = Path.home() / "google_api_client_secret.json"
-
+SCOPES = ['https://www.googleapis.com/auth/youtube.upload'] # OAuth 2.0 access scope
 API_SERVICE_NAME = "youtube"
 API_VERSION = "v3"
-VALID_PRIVACY_STATUSES = ('public', 'private', 'unlisted')
-CHUNKSIZE = 32 * 1024**2
+CHUNKSIZE = 32 * 1024**2 # 32MB
 FS_POLLING_INTERVAL = 10
-MAX_FS_RETRIES = 20
-
 patterns = ['*.mp4', '*.mkv']
 
 
-def on_created(event):
-    fname = event.src_path
-    print("File added: {}".format(fname))
-    try:
-        do_upload(fname)
-    except HttpError as e:
-        print('An HTTP error {} occurred:\n{}'.format(e.resp.status, e.content))
+def is_upload_retryable(e):
+    retryable = False
+    if isinstance(e, HttpError):
+        if e.resp.status in [500, 502, 503, 504]:
+            retryable = True
+    else:
+        for etype in (httplib2.HttpLib2Error, IOError):
+            if isinstance(e, etype):
+                retryable = True
+                break
+    return retryable
 
 
 def authenticate(client_secrets_file):
@@ -82,11 +43,13 @@ def authenticate(client_secrets_file):
     return youtube
 
 
-def do_upload(youtube, fname):
-    # Disable OAuthlib's HTTPS verification when running locally.
-    # *DO NOT* leave this option enabled in production.
-    #os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+@retry(retry_on_exception=is_upload_retryable, wait_exponential_multiplier=1e3, wait_exponential_max=1e6)
+def make_request(request):
+    return request.next_chunk()
 
+
+@retry(retry_on_exception=lambda e: isinstance(e, OSError), wait_exponential_multiplier=10e3, wait_exponential_max=30*60*1e3)
+def do_upload(youtube, fname):
     # Figure out file size for progress later
     fsize = Path(fname).stat().st_size
 
@@ -109,58 +72,29 @@ def do_upload(youtube, fname):
         media_body=MediaFileUpload(fname, chunksize=CHUNKSIZE, resumable=True)
     )
 
-    resumable_upload(request, fsize)
-
-
-# This method implements an exponential backoff strategy to resume a
-# failed upload.
-def resumable_upload(request, fsize):
-    response = None
-    error = None
-    retry = 0
     with tqdm(total=fsize) as progress:
         progress.write("Uploading...")
         while response is None:
-            try:
-                status, response = request.next_chunk()
-                if response is not None:
-                    if 'id' in response:
-                        progress.write("Video id {} was successfully uploaded.".format(response['id']))
-                    else:
-                        exit("The upload failed with an unexpected response: {}".format(response))
+            status, response = make_request(request)
+            if response is not None:
+                if 'id' in response:
+                    progress.write("Video id {} was successfully uploaded.".format(response['id']))
                 else:
-                    progress.update(CHUNKSIZE)
-
-            except HttpError as e:
-                if e.resp.status in RETRIABLE_STATUS_CODES:
-                    error = 'A retriable HTTP error %d occurred:\n%s' % (e.resp.status, e.content)
-                else:
-                    raise
-            except RETRIABLE_EXCEPTIONS as e:
-                error = "A retriable error occurred: {}".format(e)
-
-            if error is not None:
-                progress.write(error)
-                retry += 1
-                if retry > MAX_RETRIES:
-                    exit('No longer attempting to retry.')
-
-                max_sleep = 2 ** retry
-                sleep_seconds = max_sleep
-                progress.write("Sleeping {:d} seconds and then retrying...".format(sleep_seconds))
-                time.sleep(sleep_seconds)
+                    exit("The upload failed with an unexpected response: {}".format(response))
+            else:
+                progress.update(CHUNKSIZE)
 
 
-def main(dir):
-    # Authenticate
+def main(dir, client_secrets_file):
     youtube = authenticate(client_secrets_file)
-
-    # Set up folder watch
     contents = set(os.listdir(dir))
+
+    httplib2.RETRIES = 1 # we are handling retry logic ourselves.
 
     # Run until ctrl-c
     try:
         while True:
+            print("Waiting for new files")
             time.sleep(FS_POLLING_INTERVAL)
             new_contents = set(os.listdir(dir))
             added = new_contents - contents
@@ -168,18 +102,7 @@ def main(dir):
             for fname in added:
                 for pattern in patterns:
                     if fnmatch(fname, pattern):
-                        retries = 0
-                        sleep_for = 10.0
-                        while retries < MAX_FS_RETRIES:
-                            try:
-                                do_upload(youtube, os.path.join(dir, fname))
-                                break
-                            except OSError:
-                                print("File not ready. Waiting {:0.0f} seconds.".format(sleep_for))
-                                time.sleep(sleep_for)
-                                sleep_for *= 2
-                                retries += 1
-                        print("File never became ready for upload")
+                        do_upload(youtube, os.path.join(dir, fname))
     except KeyboardInterrupt:
         print("Quitting gracefully")
 
@@ -187,5 +110,8 @@ def main(dir):
 if __name__ == '__main__':
     parser = ap.ArgumentParser()
     parser.add_argument('dir', type=str, default='.', help="Folder to watch")
+    parser.add_argument('-s', '--client-secrets-file', dest='client_secrets_file', type=str,
+                        default=Path.home() / "google_api_client_secret.json",
+                        help="Path to the Google API client secrets file for this service")
     args = parser.parse_args()
-    main(args.dir)
+    main(args.dir, args.client_secrets_file)
