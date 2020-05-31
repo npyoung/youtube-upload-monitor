@@ -72,6 +72,7 @@ def do_upload(youtube, fname):
         media_body=MediaFileUpload(fname, chunksize=CHUNKSIZE, resumable=True)
     )
 
+    response = None
     with tqdm(total=fsize) as progress:
         progress.write("Uploading...")
         while response is None:
@@ -114,4 +115,4 @@ if __name__ == '__main__':
                         default=Path.home() / "google_api_client_secret.json",
                         help="Path to the Google API client secrets file for this service")
     args = parser.parse_args()
-    main(args.dir, args.client_secrets_file)
+    main(args.dir, str(args.client_secrets_file))
